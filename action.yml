@@ -25,14 +25,7 @@ runs:
         name: ${{ inputs.module-path }}
         path: ${{ inputs.module-name }}
 
-    - name: Validate Input
-      shell: bash
-      run: |
-        VALID_TAGS=("android12-5.10" "android13-5.10" "android13-5.15" "android14-5.15" "android14-6.1" "android15-6.6" "android16-6.12")
-        if [[ ! " ${VALID_TAGS[@]} " =~ " ${{ inputs.tag }} " ]]; then
-          echo "Invalid tag specified: ${{ inputs.tag }}. Must be one of: ${VALID_TAGS[@]}"
-          exit 1
-        fi
+
 
 
     - name: Install Build Tools
