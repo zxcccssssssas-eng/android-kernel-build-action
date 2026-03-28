@@ -14,12 +14,7 @@ inputs:
     description: 'Specify the architecture to build for (e.g., aarch64 or x86_64).'
     required: true
     default: 'aarch64'
-  module-path:
-    description: 'Specify the name of the kernel module artifact.'
-    required: true
-  module-name:
-    description: 'Specify the name of the kernel module.'
-    required: true
+
 
 runs:
   using: "composite"
