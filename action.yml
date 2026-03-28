@@ -33,19 +33,7 @@ runs:
           echo "Invalid tag specified: ${{ inputs.tag }}. Must be one of: ${VALID_TAGS[@]}"
           exit 1
         fi
-        if [ ! -d "${{ inputs.module-name }}" ]; then
-          echo "Invalid module-name: Directory ${{ inputs.module-name }} does not exist."
-          exit 2
-        fi
-        tree -f .
-        if [ ! -f "${{ inputs.module-name }}/Makefile" ]; then
-          echo "${{ inputs.module-name }}/Makefile does not exist."
-          exit 3
-        fi
-        if [ ! -f "${{ inputs.module-name }}/${{ inputs.module-name }}.c" ]; then
-          echo "Error: ${inputs.module-name}/${inputs.module-name}.c does not exist."
-          exit 4
-        fi
+
 
     - name: Install Build Tools
       uses: awalsh128/cache-apt-pkgs-action@latest
@@ -154,7 +142,6 @@ runs:
         mkdir output
         ls -al $OUTDIR/
         cp $OUTDIR/*Image* ./output/
-        cp $OUTDIR/${{ inputs.module-name }}.ko ./output/${{ inputs.tag }}_${{ inputs.module-name }}.ko
 
     - name: Upload Kernel Artifacts
       uses: actions/upload-artifact@v4
