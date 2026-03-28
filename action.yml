@@ -14,7 +14,23 @@ inputs:
     description: 'Specify the architecture to build for (e.g., aarch64 or x86_64).'
     required: true
     default: 'aarch64'
-
+  # === NEW: Kernel Config Inputs ===
+  config-fragment:
+    description: 'Path to kernel config fragment file(s) to merge (comma-separated for multiple).'
+    required: false
+    default: ''
+  config-options:
+    description: 'Inline kernel config options to append (e.g., "CONFIG_MY_DRIVER=y CONFIG_DEBUG=n").'
+    required: false
+    default: ''
+  config-base:
+    description: 'Base defconfig to use (e.g., gki_defconfig, vendor_defconfig).'
+    required: false
+    default: 'gki_defconfig'
+  skip-config-merge:
+    description: 'Skip config merging step if using pre-built .config.'
+    required: false
+    default: 'false'
 
 runs:
   using: "composite"
@@ -24,9 +40,6 @@ runs:
       with:
         name: ${{ inputs.module-path }}
         path: ${{ inputs.module-name }}
-
-
-
 
     - name: Install Build Tools
       uses: awalsh128/cache-apt-pkgs-action@latest
@@ -50,7 +63,6 @@ runs:
         key: gki-kernel-${{ inputs.tag }}-cache
         max-size: 2G
 
-
     - name: Setup for LKM
       shell: bash
       working-directory: android-kernel
@@ -60,10 +72,97 @@ runs:
         ast-grep -U -p '$$$ check_exports($$$) {$$$}' -r '' common/scripts/mod/modpost.c
         ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
 
-
-
-
+    # === NEW: Kernel Config Preparation Step ===
+    - name: Apply Kernel Configuration
+      if: inputs.skip-config-merge != 'true'
+      shell: bash
+      working-directory: android-kernel/common
+      run: |
+        echo "🔧 Applying kernel configuration..."
         
+        # Determine build system and config path
+        if [ -f "build/build.sh" ]; then
+          BUILD_SCRIPT="build/build.sh"
+          CONFIG_DIR="."
+        else
+          CONFIG_DIR="."
+        fi
+        
+        # Set base defconfig
+        BASE_CONFIG="${{ inputs.config-base }}"
+        echo "📋 Using base config: $BASE_CONFIG"
+        
+        # Generate initial .config from defconfig
+        if [ -f "arch/${{ inputs.arch }}/configs/${BASE_CONFIG}" ]; then
+          make ARCH=${{ inputs.arch }} O=out ${BASE_CONFIG}
+        elif [ -f "configs/${BASE_CONFIG}" ]; then
+          make ARCH=${{ inputs.arch }} O=out ${BASE_CONFIG}
+        elif [ -f "${BASE_CONFIG}" ]; then
+          cp ${BASE_CONFIG} out/.config
+        else
+          echo "⚠️ Base config not found, attempting gki_defconfig fallback..."
+          make ARCH=${{ inputs.arch }} O=out gki_defconfig || true
+        fi
+        
+        # Apply config fragments if provided
+        if [ -n "${{ inputs.config-fragment }}" ]; then
+          echo "📦 Applying config fragments: ${{ inputs.config-fragment }}"
+          IFS=',' read -ra FRAGMENTS <<< "${{ inputs.config-fragment }}"
+          for frag in "${FRAGMENTS[@]}"; do
+            frag=$(echo "$frag" | xargs)  # trim whitespace
+            if [ -f "$frag" ]; then
+              echo "   → Merging: $frag"
+              if [ -f "scripts/kconfig/merge_config.sh" ]; then
+                scripts/kconfig/merge_config.sh -m -O out out/.config "$frag"
+              else
+                cat "$frag" >> out/.config
+              fi
+            elif [ -f "${{ github.workspace }}/$frag" ]; then
+              echo "   → Merging: ${{ github.workspace }}/$frag"
+              if [ -f "scripts/kconfig/merge_config.sh" ]; then
+                scripts/kconfig/merge_config.sh -m -O out out/.config "${{ github.workspace }}/$frag"
+              else
+                cat "${{ github.workspace }}/$frag" >> out/.config
+              fi
+            else
+              echo "⚠️ Warning: Fragment not found: $frag"
+            fi
+          done
+        fi
+        
+        # Apply inline config options if provided
+        if [ -n "${{ inputs.config-options }}" ]; then
+          echo "✏️ Applying inline config options..."
+          echo "${{ inputs.config-options }}" | tr ' ' '\n' | while read -r opt; do
+            if [ -n "$opt" ]; then
+              echo "   → Setting: $opt"
+              echo "$opt" >> out/.config
+            fi
+          done
+        fi
+        
+        # Ensure GKI compliance flags
+        echo "✅ Ensuring GKI compliance options..."
+        cat >> out/.config << EOF
+        CONFIG_GKI=y
+        CONFIG_MODULES=y
+        CONFIG_MODULE_SIG=y
+        CONFIG_MODULE_SIG_FORCE=y
+        CONFIG_MODULE_SIG_ALL=y
+        EOF
+        
+        # Finalize config (resolve dependencies)
+        if [ -f "scripts/kconfig/conf" ]; then
+          echo "🔄 Finalizing config with kconfig..."
+          scripts/kconfig/conf --olddefconfig out/.config
+        elif [ -f "scripts/kconfig/merge_config.sh" ]; then
+          # Use merge script to resolve
+          scripts/kconfig/merge_config.sh -m -O out out/.config <(echo "# dummy")
+        fi
+        
+        # Show final config summary
+        echo "📊 Config summary:"
+        grep -E "^CONFIG_(GKI|MODULE|MY_DRIVER)" out/.config || true
 
     - name: Make working directory clean to avoid dirty
       shell: bash
@@ -73,13 +172,16 @@ runs:
         rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
         git config --global user.email "bot@github.actions.org"
         git config --global user.name "github.actions"
-        cd common/ && git add -A && git commit -a -m "Add Kernel Module"
+        cd common/ && git add -A && git commit -a -m "Add Kernel Module + Config"
         repo status
 
     - name: Build Kernel
       shell: bash
       working-directory: android-kernel
       run: |
+        # Set config environment for build systems that respect it
+        export KCONFIG_CONFIG=common/out/.config
+        
         if [[ "${{ inputs.tag }}" == "android16-6.12" ]]; then
           if [ "${{ inputs.arch }}" = "aarch64" ]; then
             tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist
@@ -89,12 +191,15 @@ runs:
         else
           if [ "${{ inputs.arch }}" = "aarch64" ]; then
             if [ -e build/build.sh ]; then
+              # Pass our merged config to build.sh
+              cp common/out/.config common/.config 2>/dev/null || true
               LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang"
             else
               tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist -- --dist_dir=dist
             fi
           elif [ "${{ inputs.arch }}" = "x86_64" ]; then
             if [ -e build/build.sh ]; then
+              cp common/out/.config common/.config 2>/dev/null || true
               LTO=thin BUILD_CONFIG=common/build.config.gki.x86_64 build/build.sh CC="/usr/bin/ccache clang"
             else
               tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_x86_64_dist -- --dist_dir=dist
@@ -117,9 +222,13 @@ runs:
             OUTDIR=android-kernel/dist
           fi
         fi
-        mkdir output
+        mkdir -p output
         ls -al $OUTDIR/
-        cp $OUTDIR/*Image* ./output/
+        cp $OUTDIR/*Image* ./output/ 2>/dev/null || echo "⚠️ No Image files found"
+        # Also upload final .config for debugging
+        if [ -f android-kernel/common/out/.config ]; then
+          cp android-kernel/common/out/.config ./output/config-${{ inputs.tag }}-${{ inputs.arch }}
+        fi
 
     - name: Upload Kernel Artifacts
       uses: actions/upload-artifact@v4
