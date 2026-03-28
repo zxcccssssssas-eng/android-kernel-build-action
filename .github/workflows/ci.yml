@@ -14,7 +14,7 @@ jobs:
           - android16-6.12-2025-07
         arch:
           - aarch64
-          - x86_64
+          
 
     steps:
       - name: Maximize build space
