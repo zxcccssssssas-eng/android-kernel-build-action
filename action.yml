@@ -59,26 +59,19 @@ runs:
         sudo apt-get install llvm-15 -y
         ast-grep -U -p '$$$ check_exports($$$) {$$$}' -r '' common/scripts/mod/modpost.c
         ast-grep -U -p 'check_exports($$$);' -r '' common/scripts/mod/modpost.c
-        if [ -f common/android/gki_aarch64_modules ]; then
-          echo "drivers/${{ inputs.module-name }}/${{ inputs.module-name }}.ko" >> common/android/gki_aarch64_modules
-        fi
 
-        # bazel build, android14-5.15, android14-6.1 use bazel
-        if [ ! -f build/build.sh ]; then
-          sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
-          if [ -f common/modules.bzl ]; then
-            sed -i "s/_COMMON_GKI_MODULES_LIST = \[/_COMMON_GKI_MODULES_LIST = \[ \"drivers\/${{ inputs.module-name }}\/${{ inputs.module-name }}.ko\",/g" common/modules.bzl
-          fi
-        else
-          TARGET_FILE="build/kernel/build.sh"
-          if [ ! -f "$TARGET_FILE" ]; then
-            TARGET_FILE="build/build.sh"
-          fi
-          sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' $TARGET_FILE || echo "No unknown symbol in $TARGET_FILE"
-          sed -i 's/if ! diff -u "\${KERNEL_DIR}\/\${MODULES_ORDER}" "\${OUT_DIR}\/modules\.order"; then/if false; then/g' $TARGET_FILE
-          sed -i 's@\${ROOT_DIR}/build/abi/compare_to_symbol_list@echo@g' $TARGET_FILE
-          sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
+
+
+        
+        TARGET_FILE="build/kernel/build.sh"
+        if [ ! -f "$TARGET_FILE" ]; then
+          TARGET_FILE="build/build.sh"
         fi
+        sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' $TARGET_FILE || echo "No unknown symbol in $TARGET_FILE"
+        sed -i 's/if ! diff -u "\${KERNEL_DIR}\/\${MODULES_ORDER}" "\${OUT_DIR}\/modules\.order"; then/if false; then/g' $TARGET_FILE
+        sed -i 's@\${ROOT_DIR}/build/abi/compare_to_symbol_list@echo@g' $TARGET_FILE
+        sed -i 's/needs unknown symbol/Dont abort when unknown symbol/g' build/kernel/*.sh || echo "No unknown symbol scripts found"
+        
 
     - name: Make working directory clean to avoid dirty
       shell: bash
